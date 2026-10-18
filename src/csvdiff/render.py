@@ -90,6 +90,12 @@ class Renderer:
             schema.append(f"{r}- column{reset} {col}")
         for name, oi, ni in diff.moved_columns:
             schema.append(f"{y}~ column{reset} {name} moved {oi} → {ni}")
+        for suggestion in diff.rename_suggestions:
+            schema.append(
+                f"{y}~ column renamed{reset}: "
+                f"'{suggestion.old}' → '{suggestion.new}' "
+                f"(similarity {suggestion.similarity:.2f})"
+            )
         if schema:
             lines.append(f"{b}schema{reset}")
             lines.extend(schema)
