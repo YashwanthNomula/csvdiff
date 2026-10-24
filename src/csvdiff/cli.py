@@ -19,8 +19,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("new", help="updated CSV file")
     p.add_argument(
         "--key",
-        default="0",
-        help="key column: header name or 0-based index (default: first column)",
+        action="append",
+        default=None,
+        metavar="COLS",
+        help="key column(s): header name(s) or 0-based index(es); "
+        "repeat the flag or comma-separate for a composite key, e.g. "
+        "--key sku,region (default: first column)",
     )
     p.add_argument(
         "--no-header",
@@ -94,19 +98,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="write the report to FILE instead of stdout",
     )
     p.add_argument(
-        "--version", action="version", version="%(prog)s 1.4.0"
+        "--version", action="version", version="%(prog)s 1.5.0"
     )
     return p
 
 
 def _resolve_ignore(
-    table_headers: list[str], key_index: int, spec: str, ignore_case: bool = False
+    table_headers: list[str],
+    key_indices: list[int],
+    spec: str,
+    ignore_case: bool = False,
 ) -> set[int]:
     """Turn a ``--ignore-cols`` spec into column indices for one file.
 
     Each token is a header name or a 0-based index. Raises ValueError on
-    unknown names, out-of-range indexes, or attempts to ignore the key column.
-    With ``ignore_case`` on, name tokens match headers case-insensitively.
+    unknown names, out-of-range indexes, or attempts to ignore any key
+    column. With ``ignore_case`` on, name tokens match headers
+    case-insensitively.
     """
     indices: set[int] = set()
     for raw in spec.split(","):
@@ -139,8 +147,8 @@ def _resolve_ignore(
                     raise ValueError(
                         f"--ignore-cols: unknown column {token!r}"
                     ) from None
-        if index == key_index:
-            raise ValueError("--ignore-cols: cannot ignore the key column")
+        if index in key_indices:
+            raise ValueError("--ignore-cols: cannot ignore a key column")
         indices.add(index)
     return indices
 
@@ -148,9 +156,11 @@ def _resolve_ignore(
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
+    key_specs: list[str] = args.key or ["0"]
+
     try:
         old_table, key_name = load_csv(
-            args.old, args.key, args.no_header, ignore_case=args.ignore_case
+            args.old, key_specs, args.no_header, ignore_case=args.ignore_case
         )
     except FileNotFoundError:
         print(f"csvdiff: file not found: {args.old}", file=sys.stderr)
@@ -161,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         new_table, key_name_new = load_csv(
-            args.new, args.key, args.no_header, ignore_case=args.ignore_case
+            args.new, key_specs, args.no_header, ignore_case=args.ignore_case
         )
     except FileNotFoundError:
         print(f"csvdiff: file not found: {args.new}", file=sys.stderr)
@@ -174,13 +184,13 @@ def main(argv: list[str] | None = None) -> int:
         try:
             old_ignored = _resolve_ignore(
                 old_table.headers,
-                old_table.key_index,
+                old_table.key_indices,
                 args.ignore_cols,
                 ignore_case=args.ignore_case,
             )
             new_ignored = _resolve_ignore(
                 new_table.headers,
-                new_table.key_index,
+                new_table.key_indices,
                 args.ignore_cols,
                 ignore_case=args.ignore_case,
             )
@@ -223,6 +233,8 @@ def main(argv: list[str] | None = None) -> int:
             new_headers=new_table.headers,
             old_key_index=old_table.key_index,
             new_key_index=new_table.key_index,
+            old_key_indices=old_table.key_indices,
+            new_key_indices=new_table.key_indices,
             width=args.width,
         )
     else:
@@ -234,6 +246,8 @@ def main(argv: list[str] | None = None) -> int:
             new_headers=new_table.headers,
             old_key_index=old_table.key_index,
             new_key_index=new_table.key_index,
+            old_key_indices=old_table.key_indices,
+            new_key_indices=new_table.key_indices,
         )
         output = renderer.render(diff, args.old, args.new)
 

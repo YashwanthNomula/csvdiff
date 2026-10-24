@@ -40,6 +40,9 @@ class Table:
     headers: list[str]
     rows: dict[str, list[str]]  # key -> row values
     key_index: int
+    """First (or only) key column index. Kept for backward compatibility."""
+    key_indices: list[int] = field(default_factory=list)
+    """All key column indexes (composite keys join rows on this tuple)."""
     warnings: list[str] = field(default_factory=list)
     key_display: dict[str, str] = field(default_factory=dict)
     """Map each row key to how it first appeared in the file.
@@ -52,21 +55,30 @@ class Table:
 
 
 def _index_rows(
-    records: list[list[str]], key_index: int, ignore_case: bool = False
+    records: list[list[str]], key_indices: list[int], ignore_case: bool = False
 ) -> tuple[dict[str, list[str]], list[str], dict[str, str]]:
+    """Index rows by their (possibly composite) key.
+
+    Rows join on the tuple of key column values. The internal match key is
+    the folded components joined with ``\\x1f`` (a character that cannot
+    appear in normal cell text), while the display key joins the raw
+    components with ``|`` so reports show the composite value readably.
+    """
     rows: dict[str, list[str]] = {}
     warnings: list[str] = []
     key_display: dict[str, str] = {}
     for line_no, record in enumerate(records, start=2):
-        raw = record[key_index] if key_index < len(record) else ""
-        key = raw.lower() if ignore_case else raw
+        raw_parts = [record[i] if i < len(record) else "" for i in key_indices]
+        folded = tuple(part.lower() if ignore_case else part for part in raw_parts)
+        key = "\x1f".join(folded)
+        display = "|".join(raw_parts)
         if key in rows:
             warnings.append(
-                f"duplicate key {raw!r} on line {line_no}; keeping the first occurrence"
+                f"duplicate key {display!r} on line {line_no}; keeping the first occurrence"
             )
             continue
         rows[key] = record
-        key_display[key] = raw
+        key_display[key] = display
     return rows, warnings, key_display
 
 
@@ -75,7 +87,7 @@ def drop_columns(table: Table, indices: set[int]) -> Table:
 
     Used to implement ``--ignore-cols``: dropped columns are invisible to
     schema detection, cell comparison, and row snippets alike. ``indices``
-    must not contain ``table.key_index``.
+    must not contain any of ``table.key_indices``.
     """
     keep = [i for i in range(len(table.headers)) if i not in indices]
     return Table(
@@ -85,18 +97,86 @@ def drop_columns(table: Table, indices: set[int]) -> Table:
             for key, row in table.rows.items()
         },
         key_index=keep.index(table.key_index),
+        key_indices=[keep.index(i) for i in table.key_indices],
         warnings=table.warnings,
         key_display=table.key_display,
     )
 
 
-def load_csv(
-    path: str, key: str, no_header: bool, ignore_case: bool = False
-) -> tuple[Table, str]:
-    """Load a CSV file and index its rows by the key column.
+def _resolve_key_specs(
+    key: str | list[str], headers: list[str], ignore_case: bool
+) -> list[int]:
+    """Turn a ``--key`` spec into a list of column indices.
 
-    ``key`` may be a header name or a 0-based column index. When
-    ``ignore_case`` is on, header names and key values are matched
+    ``key`` may be a single string or a list of strings (from repeatable
+    ``--key`` flags); each string may itself be comma-separated, so
+    ``--key sku,region`` and ``--key sku --key region`` are equivalent.
+    Every token is a header name or a 0-based index.
+
+    Fail-closed: empty tokens, unknown names, out-of-range indexes, and
+    repeated columns all raise ``ValueError``. Unknown names always list
+    the available columns, mirroring the ``ignore_case`` error message.
+    """
+    if isinstance(key, str):
+        specs = [key]
+    else:
+        specs = list(key)
+    tokens: list[str] = []
+    for spec in specs:
+        for raw in spec.split(","):
+            token = raw.strip()
+            if not token:
+                raise ValueError(
+                    f"empty key column in --key {spec!r}; give one or more "
+                    "column names or 0-based indexes"
+                )
+            tokens.append(token)
+    if not tokens:
+        raise ValueError("--key requires at least one column")
+
+    indices: list[int] = []
+    for token in tokens:
+        if token.isdigit():
+            index = int(token)
+            if not 0 <= index < max(len(headers), 1):
+                raise ValueError(f"key column {token!r} out of range")
+        else:
+            try:
+                index = headers.index(token)
+            except ValueError:
+                if ignore_case:
+                    lowered = token.lower()
+                    matches = [
+                        i for i, h in enumerate(headers) if h.lower() == lowered
+                    ]
+                    if matches:
+                        index = matches[0]
+                    else:
+                        raise ValueError(
+                            f"unknown key column {token!r}; "
+                            f"available: {', '.join(headers)}"
+                        ) from None
+                else:
+                    raise ValueError(
+                        f"unknown key column {token!r}; "
+                        f"available: {', '.join(headers)}"
+                    ) from None
+        if index in indices:
+            raise ValueError(f"duplicate key column {token!r}")
+        indices.append(index)
+    return indices
+
+
+def load_csv(
+    path: str, key: str | list[str], no_header: bool, ignore_case: bool = False
+) -> tuple[Table, str]:
+    """Load a CSV file and index its rows by the key column(s).
+
+    ``key`` may be a header name, a 0-based column index, a comma-separated
+    list like ``"sku,region"``, or a list of such specs (from repeatable
+    ``--key`` flags). Rows join on the tuple of key column values; reports
+    display the composite key as ``value1|value2``. When ``ignore_case`` is
+    on, header names and every key column's values are matched
     case-insensitively (reports still show each file's original casing).
     """
     with open(path, newline="", encoding="utf-8-sig") as fh:
@@ -115,27 +195,8 @@ def load_csv(
     else:
         headers = records.pop(0) if records else []
 
-    if key.isdigit():
-        key_index = int(key)
-    else:
-        try:
-            key_index = headers.index(key)
-        except ValueError:
-            if ignore_case:
-                lowered = key.lower()
-                matches = [i for i, h in enumerate(headers) if h.lower() == lowered]
-                if matches:
-                    key_index = matches[0]
-                else:
-                    raise ValueError(
-                        f"unknown key column {key!r}; "
-                        f"available: {', '.join(headers)}"
-                    ) from None
-            else:
-                raise ValueError(f"unknown key column {key!r}") from None
-
-    if not 0 <= key_index < max(len(headers), 1):
-        raise ValueError(f"key column {key!r} out of range")
+    key_indices = _resolve_key_specs(key, headers, ignore_case)
+    key_index = key_indices[0]
 
     warnings: list[str] = []
     if ignore_case and not no_header:
@@ -150,13 +211,18 @@ def load_csv(
             else:
                 seen.setdefault(folded, header)
 
-    rows, row_warnings, key_display = _index_rows(records, key_index, ignore_case)
+    rows, row_warnings, key_display = _index_rows(records, key_indices, ignore_case)
     warnings.extend(row_warnings)
-    key_name = headers[key_index] if headers and key_index < len(headers) else key
+    key_names = [
+        headers[i] if headers and i < len(headers) else f"col_{i}"
+        for i in key_indices
+    ]
+    key_name = ", ".join(key_names)
     return Table(
         headers=headers,
         rows=rows,
         key_index=key_index,
+        key_indices=key_indices,
         warnings=warnings,
         key_display=key_display,
     ), key_name
@@ -308,16 +374,18 @@ def diff_tables(
         for folded, oi in old_fold.items()
         if folded in new_fold
     ]
-    if ignore_case:
-        # the key column is an identifier, not data: its folded value already
-        # matched, so a case-only difference in the raw key must not count
-        # as a cell change
-        key_folds = set()
-        if old.headers:
-            key_folds.add(_fold(old.headers[old.key_index], ignore_case))
-        if new.headers:
-            key_folds.add(_fold(new.headers[new.key_index], ignore_case))
-        shared = [s for s in shared if s[0] not in key_folds]
+    # Key columns are identifiers, not data: their folded values already
+    # matched, so a case-only difference in a raw key value (possible with
+    # --ignore-case) must not count as a cell change. Excluding them here
+    # also keeps every composite key component out of cell comparison;
+    # without --ignore-case matched rows have byte-identical key values
+    # anyway, so the filter is a no-op for them.
+    key_folds = set()
+    for table in (old, new):
+        for i in table.key_indices:
+            if table.headers and i < len(table.headers):
+                key_folds.add(_fold(table.headers[i], ignore_case))
+    shared = [s for s in shared if s[0] not in key_folds]
 
     for key in new.rows:
         if key not in old.rows:

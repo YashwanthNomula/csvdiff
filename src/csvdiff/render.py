@@ -22,11 +22,19 @@ def _truncate(text: str, width: int) -> str:
 
 
 def _row_snippet(
-    headers: list[str], row: list[str], width: int, key_index: int
+    headers: list[str],
+    row: list[str],
+    width: int,
+    key_indices: int | set[int] | list[int] | frozenset[int],
 ) -> str:
+    """Build a ``name=value`` snippet of a row, skipping key columns."""
+    if isinstance(key_indices, int):
+        skip: set[int] | frozenset[int] = {key_indices}
+    else:
+        skip = set(key_indices)
     parts = []
     for i, name in enumerate(headers):
-        if i == key_index:
+        if i in skip:
             continue
         value = row[i] if i < len(row) else ""
         parts.append(f"{name}={_truncate(value, width)}")
@@ -42,6 +50,8 @@ class Renderer:
         new_headers: list[str],
         old_key_index: int,
         new_key_index: int,
+        old_key_indices: list[int] | None = None,
+        new_key_indices: list[int] | None = None,
     ) -> None:
         self.color = color
         self.width = width
@@ -49,6 +59,12 @@ class Renderer:
         self.new_headers = new_headers
         self.old_key_index = old_key_index
         self.new_key_index = new_key_index
+        self.old_key_indices = (
+            old_key_indices if old_key_indices is not None else [old_key_index]
+        )
+        self.new_key_indices = (
+            new_key_indices if new_key_indices is not None else [new_key_index]
+        )
 
     def _s(self, code: str) -> str:
         return code if self.color else ""
@@ -70,7 +86,8 @@ class Renderer:
         lines.append(
             f"{b}csvdiff{reset} {dim}{old_name}{reset} {b}→{reset} {dim}{new_name}{reset}"
         )
-        lines.append(f"key column: {b}{diff.key_column}{reset}")
+        key_label = "key columns" if len(self.old_key_indices) > 1 else "key column"
+        lines.append(f"{key_label}: {b}{diff.key_column}{reset}")
         lines.append("")
 
         if diff.warnings:
@@ -120,7 +137,7 @@ class Renderer:
             lines.append(f"{b}added rows{reset}")
             for key, row in diff.added_rows:
                 snippet = _row_snippet(
-                    self.new_headers, row, self.width, self.new_key_index
+                    self.new_headers, row, self.width, set(self.new_key_indices)
                 )
                 lines.append(
                     f"{g}+{reset} {b}{diff.key_column}={key}{reset}"
@@ -133,7 +150,7 @@ class Renderer:
             lines.append(f"{b}removed rows{reset}")
             for key, row in diff.removed_rows:
                 snippet = _row_snippet(
-                    self.old_headers, row, self.width, self.old_key_index
+                    self.old_headers, row, self.width, set(self.old_key_indices)
                 )
                 lines.append(
                     f"{r}-{reset} {b}{diff.key_column}={key}{reset}"

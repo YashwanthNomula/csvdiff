@@ -51,7 +51,7 @@ csvdiff old.csv new.csv
 
 | Flag | What it does |
 |---|---|
-| `--key NAME` | key column as a header name or 0-based index (default: first column) |
+| `--key COLS` | key column(s): header name(s) or 0-based index(es); repeat the flag or comma-separate for a composite key, e.g. `--key sku,region` (default: first column) |
 | `--no-header` | first row is data, not headers (`col_0`, `col_1`, …) |
 | `--width N` | truncate long cell values to N chars (default 40) |
 | `--ignore-cols COLS` | comma-separated columns (names or 0-based indexes) to exclude from the comparison — handy for noisy columns like `updated_at` |
@@ -83,6 +83,20 @@ csvdiff baseline.csv current.csv --suggest-renames --no-color
 # - column customer_id
 # ~ column renamed: 'customer_id' → 'customerid' (similarity 0.95)
 ```
+- **Composite keys** — when one column is not unique, join rows on several:
+  repeat `--key` or comma-separate it. Reports show the composite value as
+  `sku|region`, and key columns stay out of cell comparison (with
+  `--ignore-case` applying to every key column):
+
+```bash
+csvdiff old.csv new.csv --key sku,region --no-color
+# key columns: sku, region
+# ~ sku, region=A100|us
+#     price: 10.00 → 12.00
+```
+
+Unknown key columns, empty specs, and repeats are rejected up front with
+exit code 2 (unknown names list the available columns).
 - **Duplicate-key warnings** — tells you when a key appears twice instead of silently guessing
 - **Delimiter sniffing** — handles `,`, `;`, `\t`, and `|` files automatically
 - **Noisy-column exclusion** — `--ignore-cols updated_at` drops ever-changing columns from the comparison entirely:
@@ -132,7 +146,7 @@ csvdiff examples/old.csv examples/new.csv
 ## Tests
 
 ```bash
-python -m pytest tests/   # 67 tests: engine, renderer, CLI edge cases, --ignore-cols, --format html, --tol, --suggest-renames, --ignore-case
+python -m pytest tests/   # 82 tests: engine, renderer, CLI edge cases, --ignore-cols, --format html, --tol, --suggest-renames, --ignore-case, composite keys
 ```
 
 ## License

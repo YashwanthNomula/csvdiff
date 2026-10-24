@@ -749,3 +749,231 @@ def test_ignore_case_cli_html_renders():
     assert "<html" in out
     assert "A100" in out  # original key casing shown
     assert "apricot" in out
+
+
+# --- composite keys ---------------------------------------------------------
+
+COMP_OLD = "sku,region,price\nA100,us,10.00\nA100,eu,11.00\nB200,us,5.00\n"
+COMP_NEW = "sku,region,price\nA100,us,12.00\nA100,eu,11.00\nC300,us,7.00\n"
+
+
+def _composite_tables(old: str = COMP_OLD, new: str = COMP_NEW, key="sku,region"):
+    o = _write_csv(old)
+    n = _write_csv(new)
+    try:
+        old_t, old_key = load_csv(o, key, False)
+        new_t, new_key = load_csv(n, key, False)
+    finally:
+        os.unlink(o)
+        os.unlink(n)
+    assert old_key == new_key == "sku, region"
+    return old_t, new_t, old_key
+
+
+def test_composite_key_identical_files():
+    old, new, key = _composite_tables(COMP_OLD, COMP_OLD)
+    diff = diff_tables(old, new, key)
+    assert diff.is_empty
+    assert diff.unchanged_row_count == 3
+
+
+def test_composite_key_cell_change():
+    old, new, key = _composite_tables()
+    diff = diff_tables(old, new, key)
+    assert len(diff.changed_rows) == 1
+    row = diff.changed_rows[0]
+    assert row.key == "A100|us"
+    assert [(c.column, c.old, c.new) for c in row.changes] == [
+        ("price", "10.00", "12.00")
+    ]
+    assert len(diff.added_rows) == 1
+    assert len(diff.removed_rows) == 1
+    assert diff.unchanged_row_count == 1  # A100|eu matched, unchanged
+
+
+def test_composite_key_partial_match_is_add_and_remove():
+    # same sku but a different region is a different row, not a change
+    old = "sku,region,price\nA100,us,10.00\n"
+    new = "sku,region,price\nA100,eu,10.00\n"
+    old_t, new_t, key = _composite_tables(old, new)
+    diff = diff_tables(old_t, new_t, key)
+    assert not diff.changed_rows
+    assert [k for k, _ in diff.added_rows] == ["A100|eu"]
+    assert [k for k, _ in diff.removed_rows] == ["A100|us"]
+
+
+def test_composite_key_components_excluded_from_cell_diffs():
+    # case-only differences in key components must not count as cell changes
+    old = "sku,region,price\nA100,US,10.00\n"
+    new = "sku,region,price\na100,us,10.00\n"
+    o = _write_csv(old)
+    n = _write_csv(new)
+    try:
+        old_t, _ = load_csv(o, "sku,region", False, ignore_case=True)
+        new_t, key = load_csv(n, "sku,region", False, ignore_case=True)
+        diff = diff_tables(old_t, new_t, key, ignore_case=True)
+    finally:
+        os.unlink(o)
+        os.unlink(n)
+    assert diff.is_empty
+    assert diff.unchanged_row_count == 1
+
+
+def test_composite_key_case_insensitive_matching():
+    old = "sku,region,price\nA100,US,10.00\n"
+    new = "sku,region,price\na100,us,12.00\n"
+    o = _write_csv(old)
+    n = _write_csv(new)
+    try:
+        old_t, _ = load_csv(o, "sku,region", False, ignore_case=True)
+        new_t, key = load_csv(n, "sku,region", False, ignore_case=True)
+        diff = diff_tables(old_t, new_t, key, ignore_case=True)
+    finally:
+        os.unlink(o)
+        os.unlink(n)
+    assert len(diff.changed_rows) == 1
+    assert diff.changed_rows[0].key == "A100|US"  # old file's casing shown
+
+
+def test_composite_key_unknown_column_rejected():
+    o = _write_csv(COMP_OLD)
+    try:
+        with __import__("pytest").raises(ValueError) as excinfo:
+            load_csv(o, "sku,bogus", False)
+    finally:
+        os.unlink(o)
+    assert "unknown key column 'bogus'" in str(excinfo.value)
+    assert "available: sku, region, price" in str(excinfo.value)
+
+
+def test_composite_key_empty_token_rejected():
+    o = _write_csv(COMP_OLD)
+    try:
+        for bad in ("sku,", ",sku", "", "  "):
+            try:
+                load_csv(o, bad, False)
+            except ValueError as exc:
+                assert "empty key column" in str(exc)
+            else:
+                raise AssertionError(f"expected ValueError for --key {bad!r}")
+    finally:
+        os.unlink(o)
+
+
+def test_composite_key_duplicate_column_rejected():
+    o = _write_csv(COMP_OLD)
+    try:
+        try:
+            load_csv(o, "sku,sku", False)
+        except ValueError as exc:
+            assert "duplicate key column" in str(exc)
+        else:
+            raise AssertionError("expected ValueError for duplicate key column")
+    finally:
+        os.unlink(o)
+
+
+def test_composite_key_repeatable_cli_flag():
+    import io
+    from contextlib import redirect_stdout
+
+    o = _write_csv(COMP_OLD)
+    n = _write_csv(COMP_NEW)
+    try:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = main([o, n, "--key", "sku", "--key", "region", "--no-color"])
+        assert rc == 1
+        out = buf.getvalue()
+        assert "key columns: sku, region" in out
+        assert "sku, region=A100|us" in out
+    finally:
+        os.unlink(o)
+        os.unlink(n)
+
+
+def test_composite_key_by_index():
+    old, new, key = _composite_tables(key="0,1")
+    assert key == "sku, region"
+    diff = diff_tables(old, new, key)
+    assert len(diff.changed_rows) == 1
+    assert diff.changed_rows[0].key == "A100|us"
+
+
+def test_composite_key_report_shows_composite_value():
+    import io
+    from contextlib import redirect_stdout
+
+    o = _write_csv(COMP_OLD)
+    n = _write_csv(COMP_NEW)
+    try:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = main([o, n, "--key", "sku,region", "--no-color"])
+        assert rc == 1
+        out = buf.getvalue()
+        assert "key columns: sku, region" in out
+        assert "sku, region=A100|us" in out
+        assert "sku, region=C300|us" in out
+        assert "sku, region=B200|us" in out
+    finally:
+        os.unlink(o)
+        os.unlink(n)
+
+
+def test_composite_key_duplicate_rows_warn():
+    old = "sku,region,price\nA100,us,10.00\nA100,us,11.00\n"
+    o = _write_csv(old)
+    try:
+        table, _ = load_csv(o, "sku,region", False)
+    finally:
+        os.unlink(o)
+    assert any("duplicate key 'A100|us'" in w for w in table.warnings)
+    assert len(table.rows) == 1
+
+
+def test_composite_key_no_header_mode():
+    old = "A100,us,10.00\nA100,eu,11.00\n"
+    new = "A100,us,12.00\nA100,eu,11.00\n"
+    o = _write_csv(old)
+    n = _write_csv(new)
+    try:
+        old_t, key = load_csv(o, "0,1", True)
+        new_t, _ = load_csv(n, "0,1", True)
+        diff = diff_tables(old_t, new_t, key)
+    finally:
+        os.unlink(o)
+        os.unlink(n)
+    assert key == "col_0, col_1"
+    assert len(diff.changed_rows) == 1
+    assert diff.changed_rows[0].key == "A100|us"
+
+
+def test_ignore_cols_cannot_ignore_composite_key_component():
+    o = _write_csv(COMP_OLD)
+    n = _write_csv(COMP_NEW)
+    try:
+        assert main([o, n, "--key", "sku,region", "--ignore-cols", "region"]) == 2
+    finally:
+        os.unlink(o)
+        os.unlink(n)
+
+
+def test_composite_key_html_report():
+    import io
+    from contextlib import redirect_stdout
+
+    o = _write_csv(COMP_OLD)
+    n = _write_csv(COMP_NEW)
+    try:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = main([o, n, "--key", "sku,region", "--format", "html"])
+        assert rc == 1
+        out = buf.getvalue()
+        assert "key columns:" in out
+        assert "sku, region" in out
+        assert "A100|us" in out
+    finally:
+        os.unlink(o)
+        os.unlink(n)

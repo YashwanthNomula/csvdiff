@@ -155,18 +155,22 @@ def _render_changed(diff: TableDiff, width: int) -> str:
 def _render_row_table(
     title: str,
     headers: list[str],
-    key_index: int,
+    key_indices: int | set[int] | list[int] | frozenset[int],
     rows: list[tuple[str, list[str]]],
     css_class: str,
     width: int,
 ) -> str:
+    if isinstance(key_indices, int):
+        skip = {key_indices}
+    else:
+        skip = set(key_indices)
     head = "".join(f"<th>{escape(h)}</th>" for h in headers)
     body: list[str] = []
     for _key, row in rows:
         cells = []
         for i in range(len(headers)):
             value = row[i] if i < len(row) else ""
-            cls = ' class="key"' if i == key_index else ""
+            cls = ' class="key"' if i in skip else ""
             cells.append(f"<td{cls}>{escape(_truncate(value, width))}</td>")
         body.append(f'<tr class="{css_class}">' + "".join(cells) + "</tr>")
     return (
@@ -198,12 +202,17 @@ def render_html(
     old_key_index: int,
     new_key_index: int,
     width: int = 40,
+    old_key_indices: list[int] | None = None,
+    new_key_indices: list[int] | None = None,
 ) -> str:
     """Render ``diff`` as a standalone HTML document.
 
     All CSS is inlined and every dynamic value is HTML-escaped, so the
     result is a single self-contained file safe to open or attach.
     """
+    old_keys = old_key_indices if old_key_indices is not None else [old_key_index]
+    new_keys = new_key_indices if new_key_indices is not None else [new_key_index]
+    key_label = "key columns" if len(old_keys) > 1 else "key column"
     title = f"csvdiff report: {old_name} → {new_name}"
     parts = [
         "<!DOCTYPE html>",
@@ -218,7 +227,7 @@ def render_html(
         "<h1>csvdiff</h1>",
         f'<p class="files"><code>{escape(old_name)}</code> '
         f'<span class="arrow">→</span> <code>{escape(new_name)}</code></p>',
-        f'<p class="meta">key column: <code>{escape(diff.key_column)}</code></p>',
+        f'<p class="meta">{key_label}: <code>{escape(diff.key_column)}</code></p>',
         "</header>",
         _render_warnings(diff),
     ]
@@ -239,7 +248,7 @@ def render_html(
                 _render_row_table(
                     "Added rows",
                     new_headers,
-                    new_key_index,
+                    new_keys,
                     diff.added_rows,
                     "added",
                     width,
@@ -250,7 +259,7 @@ def render_html(
                 _render_row_table(
                     "Removed rows",
                     old_headers,
-                    old_key_index,
+                    old_keys,
                     diff.removed_rows,
                     "removed",
                     width,
