@@ -251,3 +251,23 @@ def test_html_escapes_rename_names():
     assert "&lt;" in report
     # raw angle brackets from column names must not leak into the report
     assert "<b_name" not in report and "<bname" not in report
+
+
+def test_summary_only_html_keeps_badges_hides_tables():
+    o = _write_csv(OLD)
+    n = _write_csv(NEW)
+    try:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = main([o, n, "--format", "html", "--summary-only"])
+        out = buf.getvalue()
+    finally:
+        os.unlink(o)
+        os.unlink(n)
+    assert rc == 1
+    assert "<h2>Summary</h2>" in out
+    assert "1 added" in out and "1 removed" in out and "1 changed" in out
+    assert "<table" not in out
+    assert "Changed rows" not in out
+    assert "Added rows" not in out
+    assert "Removed rows" not in out

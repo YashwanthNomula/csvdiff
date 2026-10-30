@@ -91,6 +91,12 @@ def build_parser() -> argparse.ArgumentParser:
         "'html' standalone report",
     )
     p.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="print only the counts summary, not the per-row/per-column "
+        "detail — handy for CI logs and large diffs (exit code unchanged)",
+    )
+    p.add_argument(
         "-o",
         "--output",
         metavar="FILE",
@@ -98,7 +104,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="write the report to FILE instead of stdout",
     )
     p.add_argument(
-        "--version", action="version", version="%(prog)s 1.5.0"
+        "--version", action="version", version="%(prog)s 1.6.0"
     )
     return p
 
@@ -236,6 +242,7 @@ def main(argv: list[str] | None = None) -> int:
             old_key_indices=old_table.key_indices,
             new_key_indices=new_table.key_indices,
             width=args.width,
+            summary_only=args.summary_only,
         )
     else:
         use_color = args.color if args.color is not None else sys.stdout.isatty()
@@ -248,6 +255,7 @@ def main(argv: list[str] | None = None) -> int:
             new_key_index=new_table.key_index,
             old_key_indices=old_table.key_indices,
             new_key_indices=new_table.key_indices,
+            summary_only=args.summary_only,
         )
         output = renderer.render(diff, args.old, args.new)
 

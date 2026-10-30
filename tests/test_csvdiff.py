@@ -977,3 +977,64 @@ def test_composite_key_html_report():
     finally:
         os.unlink(o)
         os.unlink(n)
+
+
+# --- --summary-only ---------------------------------------------------------
+
+def test_summary_only_text_keeps_counts_hides_detail():
+    import io
+    from contextlib import redirect_stdout
+
+    o = _write_csv(OLD)
+    n = _write_csv(NEW)
+    try:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = main([o, n, "--summary-only", "--no-color"])
+        out = buf.getvalue()
+    finally:
+        os.unlink(o)
+        os.unlink(n)
+    assert rc == 1  # exit code unchanged by --summary-only
+    assert "rows: 1 added, 1 removed, 1 changed (1 cells), 1 unchanged" in out
+    # no detail sections, no row keys, no cell values
+    assert "changed rows" not in out
+    assert "added rows" not in out
+    assert "removed rows" not in out
+    assert "sku" not in out and "1.20" not in out and "date" not in out
+
+
+def test_summary_only_text_keeps_schema_counts():
+    import io
+    from contextlib import redirect_stdout
+
+    o = _write_csv("id,a\n1,x\n")
+    n = _write_csv("id,b\n1,x\n")
+    try:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = main([o, n, "--summary-only", "--no-color"])
+        out = buf.getvalue()
+    finally:
+        os.unlink(o)
+        os.unlink(n)
+    assert rc == 1
+    assert "columns: +1 cols, -1 cols" in out
+    assert "schema" not in out
+    assert "column renamed" not in out
+
+
+def test_summary_only_identical_exit_zero():
+    import io
+    from contextlib import redirect_stdout
+
+    o = _write_csv(OLD)
+    try:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = main([o, o, "--summary-only", "--no-color"])
+        out = buf.getvalue()
+    finally:
+        os.unlink(o)
+    assert rc == 0
+    assert "identical" in out

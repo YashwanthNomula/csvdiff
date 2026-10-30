@@ -60,6 +60,7 @@ csvdiff old.csv new.csv
 | `--suggest-renames` / `--no-suggest-renames` | fuzzy-match removed/added column names (difflib ratio ≥ 0.6, case-insensitive) and suggest renames like `~ column renamed: 'category' → 'rating' (similarity 0.75)` — on by default; shows in text and HTML reports |
 | `--color` / `--no-color` | force colors on/off (auto-detects TTY) |
 | `--format text\|html` | output format: terminal text report (default) or a standalone HTML report |
+| `--summary-only` | print only the counts summary, not the per-row/per-column detail — handy for CI logs and large diffs (exit code unchanged) |
 | `-o`, `--output FILE` | write the report to FILE instead of stdout |
 
 Exit code is `0` when the files are identical, `1` when differences are found
@@ -67,6 +68,17 @@ Exit code is `0` when the files are identical, `1` when differences are found
 
 ```bash
 csvdiff baseline.csv current.csv --no-color | tee diff-report.txt
+```
+
+Counts only, for CI logs or huge diffs (works with `--format html` too,
+where it keeps just the summary badges):
+
+```bash
+csvdiff baseline.csv current.csv --summary-only --no-color
+# csvdiff baseline.csv → current.csv
+# key column: sku
+#
+# rows: 1 added, 1 removed, 4 changed (4 cells), 1 unchanged | columns: +1 cols, -1 cols
 ```
 
 Other niceties:
